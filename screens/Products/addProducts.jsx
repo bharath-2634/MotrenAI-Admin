@@ -1,5 +1,8 @@
-import React, { useState } from "react";
-import { View, Text, TextInput, Button, Image, TouchableOpacity, Alert, StyleSheet } from "react-native";
+import React, { useState, useEffect } from "react";
+import { 
+  View, Text, TextInput, Button, Image, TouchableOpacity, Alert, 
+  StyleSheet, ScrollView, Platform 
+} from "react-native";
 import firestore from "@react-native-firebase/firestore";
 import storage from "@react-native-firebase/storage";
 import * as ImagePicker from "react-native-image-picker";
@@ -9,85 +12,135 @@ const AddProduct = () => {
   const navigation = useNavigation();
   const [productName, setProductName] = useState("");
   const [productPrice, setProductPrice] = useState("");
-  const [productImage, setProductImage] = useState(null);
   const [imageUri, setImageUri] = useState(null);
   const [productLocation, setProductLocation] = useState(["", ""]);
+  const [productImages, setProductImages] = useState([]);
+  const [uploading, setUploading] = useState(false);
 
-  // 📸 Image Picker Function
   const pickImage = async () => {
-    ImagePicker.launchImageLibrary({ mediaType: "photo" }, (response) => {
+    ImagePicker.launchImageLibrary({ 
+      mediaType: "photo",
+      quality: 0.8,
+      includeBase64: false
+    }, (response) => {
       if (response.didCancel) {
         console.log("User cancelled image picker");
       } else if (response.error) {
         console.log("ImagePicker Error: ", response.error);
+        Alert.alert("Error", "Failed to pick image: " + response.error);
       } else if (response.assets && response.assets.length > 0) {
-        setImageUri(response.assets[0].uri);
+        const uri = response.assets[0].uri;
+        // Fix Android file URI
+        const fixedUri = Platform.OS === 'android' ? uri : uri.replace('file://', '');
+        setImageUri(fixedUri);
       }
     });
   };
-  
 
-  // 🔼 Upload Image to Firebase Storage
   const uploadImage = async () => {
-    if (!imageUri) return null;
-    console.log("Image URI:", imageUri);
+    if (!imageUri) {
+      Alert.alert("Error", "No image selected!");
+      return null;
+    }
+  
+    setUploading(true);
+  
     try {
-      const fileName = `products/${Date.now()}.jpg`; // Unique file name
-      console.log("Uploading to:", fileName);
+      const fileName = `products/${Date.now()}.jpg`;
       const reference = storage().ref(fileName);
   
-      // Upload file
-      await reference.putFile(imageUri.replace("file://", ""));
+      // Ensure correct format of file URI
+      const fileUri = Platform.OS === 'android' ? imageUri : imageUri.replace('file://', '');
+      Alert.alert("FileUri",fileUri);
+      console.log("Uploading file from:", fileUri); // Debugging output
   
-      // Ensure file is uploaded before getting URL
-      await new Promise(resolve => setTimeout(resolve, 3000)); 
+      // Start the upload
+      await reference.putFile(fileUri);
+      Alert.alert("Success");
+      console.log("Upload successful, fetching URL..."); // Debugging output
   
-      // Fetch URL
+      // Get download URL
       const downloadURL = await reference.getDownloadURL();
-      console.log("Download URL:", downloadURL);
-      return downloadURL;
+      Alert.alert("download",downloadURL);
+      console.log("File URL:", downloadURL); // Debugging output
   
+      setUploading(false);
+      return downloadURL;
     } catch (error) {
-      console.error("Image upload error:", error.message);
+      console.error("Upload failed:", error);
+      setUploading(false);
+      Alert.alert("Error", "Image upload failed: " + error.message);
       return null;
     }
   };
   
-  
 
-  // ➕ Add Product to Firestore
   const addProduct = async () => {
     if (!productName || !productPrice) {
       Alert.alert("Error", "Please fill in all fields");
       return;
     }
 
+    if (uploading) {
+      Alert.alert("Please wait", "Image is currently uploading");
+      return;
+    }
+
     try {
-      const imageUrl = await uploadImage(); // Upload image and get URL
-        
+      const imageUrl = await uploadImage();
+      if (!imageUrl) return;
+
       const newProduct = {
         ProductId: Date.now(),
         ProductName: productName,
         ProductPrice: parseFloat(productPrice),
-        ProductImage: imageUrl || "",
+        ProductImage: imageUrl,
         ProductLocation: productLocation,
+        createdAt: firestore.FieldValue.serverTimestamp()
       };
 
       await firestore().collection("products").add(newProduct);
-
+      
       Alert.alert("Success", "Product added successfully!");
-      navigation.goBack(); // Go back to previous screen
+      resetForm();
+      fetchProductImages();
     } catch (error) {
-      console.error("Error adding product:", error);
-      Alert.alert("Error", "Could not add product");
+      console.error("Add product error:", error);
+      Alert.alert("Error", "Could not add product: " + error.message);
     }
   };
 
+  const resetForm = () => {
+    setProductName("");
+    setProductPrice("");
+    setImageUri(null);
+    setProductLocation(["", ""]);
+  };
+
+  const fetchProductImages = async () => {
+    try {
+      const snapshot = await firestore()
+        .collection("products")
+        .orderBy("createdAt", "desc")
+        .limit(10)
+        .get();
+      
+      const images = snapshot.docs.map(doc => doc.data().ProductImage);
+      setProductImages(images);
+    } catch (error) {
+      console.error("Error fetching images:", error);
+      Alert.alert("Error", "Failed to load product images");
+    }
+  };
+
+  useEffect(() => {
+    fetchProductImages();
+  }, []);
+
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container}>
       <Text style={styles.title}>Add New Product</Text>
 
-      {/* Product Name */}
       <TextInput
         style={styles.input}
         placeholder="Product Name"
@@ -95,7 +148,6 @@ const AddProduct = () => {
         onChangeText={setProductName}
       />
 
-      {/* Product Price */}
       <TextInput
         style={styles.input}
         placeholder="Product Price"
@@ -104,7 +156,6 @@ const AddProduct = () => {
         onChangeText={setProductPrice}
       />
 
-      {/* Product Image Picker */}
       <TouchableOpacity style={styles.imagePicker} onPress={pickImage}>
         {imageUri ? (
           <Image source={{ uri: imageUri }} style={styles.image} />
@@ -113,7 +164,6 @@ const AddProduct = () => {
         )}
       </TouchableOpacity>
 
-      {/* Product Location Inputs */}
       <TextInput
         style={styles.input}
         placeholder="Location 1"
@@ -127,13 +177,22 @@ const AddProduct = () => {
         onChangeText={(text) => setProductLocation([productLocation[0], text])}
       />
 
-      {/* Add Product Button */}
-      <Button title="Add Product" onPress={addProduct} />
-    </View>
+      <Button 
+        title={uploading ? "Uploading..." : "Add Product"} 
+        onPress={addProduct} 
+        disabled={uploading}
+      />
+
+      <Text style={styles.title}>Recent Product Images</Text>
+      <ScrollView horizontal>
+        {productImages.map((url, index) => (
+          <Image key={index} source={{ uri: url }} style={styles.fetchedImage} />
+        ))}
+      </ScrollView>
+    </ScrollView>
   );
 };
 
-// 🎨 Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -144,6 +203,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "bold",
     marginBottom: 20,
+    marginTop: 10,
   },
   input: {
     borderWidth: 1,
@@ -159,10 +219,19 @@ const styles = StyleSheet.create({
     padding: 12,
     alignItems: "center",
     marginBottom: 10,
+    justifyContent: "center",
+    height: 150,
   },
   image: {
+    width: "100%",
+    height: "100%",
+    resizeMode: "contain",
+  },
+  fetchedImage: {
     width: 100,
     height: 100,
+    marginRight: 10,
+    borderRadius: 8,
   },
 });
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { Camera, useCameraDevice, useCodeScanner } from 'react-native-vision-camera';
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -9,6 +9,7 @@ const QrScanner = () => {
   const navigation = useNavigation();
   const device = useCameraDevice('back');
   const [hasPermission, setHasPermission] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const requestCameraPermission = async () => {
@@ -20,9 +21,7 @@ const QrScanner = () => {
 
   const updateUserLoggedInStatus = async (uid) => {
     try {
-      Alert.alert("User",uid);
       const userRef = firestore().collection('users').doc(uid);
-      Alert.alert("userData", JSON.stringify(userRef.path));
       const userDoc = await userRef.get();
       if (userDoc.exists) {
         await userRef.update({ loggedIn: true });
@@ -35,13 +34,34 @@ const QrScanner = () => {
     }
   };
 
+  const fetchRecommendations = async (userId) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`https://suggestproducts.onrender.com/get?userId=${userId}`);
+      const data = await response.json();
+
+      if (response.ok) {
+        Alert.alert('Recommendations', JSON.stringify(data));
+        console.log('Recommendations:', data);
+      } else {
+        Alert.alert('Error', 'Failed to fetch recommendations');
+        console.error('Error fetching recommendations:', data);
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      Alert.alert('Error', 'Something went wrong while fetching recommendations');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const codeScanner = useCodeScanner({
     codeTypes: ['qr', 'ean-13', 'code-128'],
-    onCodeScanned: (codes) => {
-      const qrData = codes[0]?.value; // User UID
-      if (qrData) {
-        // Alert.alert("data",qrData);
-        updateUserLoggedInStatus(qrData);
+    onCodeScanned: async (codes) => {
+      const userId = codes[0]?.value;
+      if (userId) {
+        updateUserLoggedInStatus(userId);
+        fetchRecommendations(userId);
       }
     },
   });
@@ -63,11 +83,15 @@ const QrScanner = () => {
         codeScanner={codeScanner}
       />
 
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={styles.loadingText}>Fetching recommendations...</Text>
+        </View>
+      )}
+
       <View style={styles.overlay}>
         <Text style={styles.scanText}>Scan a QR Code</Text>
-        <TouchableOpacity style={styles.buttonTouchable}>
-          <Text style={styles.buttonText}>OK. Got it!</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -98,16 +122,7 @@ const styles = StyleSheet.create({
   scanText: {
     color: 'white',
     fontSize: 18,
-    marginBottom: 10,
     textAlign: 'center',
-  },
-  buttonText: {
-    fontSize: 18,
-    color: '#0af',
-  },
-  buttonTouchable: {
-    padding: 12,
-    alignItems: 'center',
   },
   errorText: {
     flex: 1,
@@ -115,6 +130,20 @@ const styles = StyleSheet.create({
     fontSize: 20,
     marginTop: 50,
     color: 'red',
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -50 }, { translateY: -50 }],
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 20,
+    borderRadius: 10,
+  },
+  loadingText: {
+    color: 'white',
+    marginTop: 10,
+    textAlign: 'center',
   },
 });
 
